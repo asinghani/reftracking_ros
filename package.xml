@@ -2,7 +2,7 @@
 <package format="2">
     <name>reftracking_ros</name>
     <version>1.0.0</version>
-    <description>Implements nonlinear reference tracking for path following with ROS</description>
+    <description>ROS implementation of nonlinear reference tracking for path following</description>
 
     <maintainer email="anish_oss@anishsinghani.com">asinghani</maintainer>
 
