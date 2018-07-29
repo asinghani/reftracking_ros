@@ -1,6 +1,7 @@
 #include "ros/ros.h"
 #include "geometry_msgs/Twist.h"
 #include "pathfinder_ros/Path.h"
+#include "geometry_msgs/PoseStamped.h"
 #include "pathfinder_ros/PathSegment.h"
 #include "tf/transform_listener.h"
 using namespace ros;
@@ -23,7 +24,6 @@ int state = STATE_IDLE;
 pathfinder_ros::Path::ConstPtr path;
 int pathHz; // Path rate (hertz)
 ros::Rate* loopRate = NULL;
-std::string pathTf;
 
 double getYaw(tf::Transform tf) {
     tf::Matrix3x3 m(tf.getRotation());
@@ -56,15 +56,12 @@ double gainFunc(double linvel, double angvel, double b, double zeta) {
 void pathUpdate(const pathfinder_ros::Path::ConstPtr& msg) {
     cout << "Recieved Path" << endl;
     path = msg;
-    pathHz = static_cast<int>(1.0 / path->path[0].dt);
+    pathHz = static_cast<int>((1.0 / path->path[0].dt) + 0.1);
     ros::Rate tempRate(pathHz);
     loopRate = &tempRate;
 
-    pathTf = msg->header.frame_id;
     cout << "Entering STATE_ALIGN_START" << endl;
     state = STATE_ALIGN_START;
-
-    cout << pathHz << endl;
 }
 
 int main(int argc, char **argv) {
@@ -72,13 +69,14 @@ int main(int argc, char **argv) {
     NodeHandle n;
     NodeHandle params("~");
 
-    float zeta = params.param("zeta", 0.0);
-    float b = params.param("b", 0.0);
-    float alignP = params.param("align_coeff", 1.0);
-    float alignTolerance = params.param("align_tolerance", 0.2);
+    float zeta = params.param("zeta", 0.3);
+    float b = params.param("b", 25.5);
+    float alignP = params.param("align_coeff", -0.55);
+    float alignTolerance = params.param("align_tolerance", 0.35);
     float goalPosTolerance = params.param("goal_tolerance", 0.2);
     std::string robotTf = params.param<std::string>("robot_tf", "/base_link");
-    std::string pathTopic = params.param<std::string>("path_topic", "/pathfinder_ros/path_references");
+    std::string pathTf = params.param<std::string>("path_tf", "/odom");
+    std::string pathTopic = params.param<std::string>("path_topic", "pathfinder_ros/path_references");
 
     // TODO: replace with proper rosout print
     cout << "====================================================" << endl;
@@ -89,10 +87,14 @@ int main(int argc, char **argv) {
     cout << "Align Tolerance: " << alignTolerance << endl;
     cout << "Goal Tolerance: " << goalPosTolerance << endl;
     cout << "Robot TF: " << robotTf << endl;
+    cout << "Path TF: " << pathTf << endl;
     cout << "Path Topic: " << pathTopic << endl;
     cout << "====================================================" << endl;
 
-    Subscriber sub = n.subscribe(pathTopic, 1000, pathUpdate);
+    Subscriber sub = n.subscribe(pathTopic, 1, pathUpdate);
+
+    // visualization only
+    Publisher vis = n.advertise<geometry_msgs::PoseStamped>("/reftracking_ros/reference", 1000, true);
 
     Publisher publisher = n.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
 
@@ -109,10 +111,12 @@ int main(int argc, char **argv) {
 
         try {
             tf::StampedTransform transform;
-            listener.lookupTransform(robotTf, pathTf, ros::Time(0), transform);
+            listener.lookupTransform(pathTf, robotTf, ros::Time(0), transform);
             double robotX = (double) (transform.getOrigin().getX());
             double robotY = (double) (transform.getOrigin().getY());
             double robotTheta = getYaw(transform);
+
+            // cout << robotX << " " << robotY << " " << robotTheta << endl;
 
             if(state == STATE_IDLE) {
                 // Don't move
@@ -158,15 +162,28 @@ int main(int argc, char **argv) {
                 double linvel = (vFF * cos(thetaError)) + (gainFunc(vFF, wFF, b, zeta) * (xError * cos(theta) + yError * sin(theta)));
                 double angvel = wFF + (b * vFF * (sin(thetaError) / thetaError) * (yError * cos(theta) - xError * sin(theta))) +
                                 (gainFunc(vFF, wFF, b, zeta) * thetaError);
+
+                cout << xError << "," << yError << "," << thetaError << "," << vFF <<
+                    "," << wFF << "," << theta << "," << linvel << "," << angvel << endl;
                 
                 msg.linear.x = linvel;
                 msg.angular.z = angvel;
 
+                geometry_msgs::PoseStamped ref;
+
+                ref.pose.orientation = tf::createQuaternionMsgFromYaw(seg.heading);
+                ref.pose.position.x = seg.x;
+                ref.pose.position.y = seg.y;
+                ref.pose.position.z = 0.0;
+                ref.header.frame_id = pathTf;
+
+                vis.publish(ref);
+
                 if(count < (path->path.size() - 1)) {
                     count++;
                 } else {
-                    cout << "Entering STATE_ALIGN_END" << endl;
-                    state = STATE_ALIGN_END;
+                    cout << "Entering STATE_IDLE (skipping ALIGN_END)" << endl;
+                    state = STATE_IDLE;
                     msg.linear.x = 0.0;
                     msg.angular.z = 0.0;
                 }
@@ -181,10 +198,11 @@ int main(int argc, char **argv) {
 
         publisher.publish(msg);
         ros::spinOnce();
-        if(loopRate == NULL) {
+        if(1 + 1 == 2) { //loopRate == NULL) {
             waitForMap.sleep(); 
         } else {
             loopRate->sleep();
+            cout << "looooooop" << endl;
         }
     }
 
